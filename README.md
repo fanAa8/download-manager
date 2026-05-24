@@ -1,4 +1,4 @@
-<div align="center">
+﻿<div align="center">
 
 # 📂 下载分类管家
 
@@ -158,3 +158,10 @@ Windows 10/11，64 位。自动跟随系统明暗主题。
 <div align="center">
 如果觉得有用，给个 ⭐ Star 支持一下！
 </div>
+
+
+---
+
+## 致谢
+
+本项目由 [小米 MiMo](https://www.mi.com) AI 协助开发完成
