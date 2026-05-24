@@ -1217,7 +1217,7 @@ def initial_scan(base: Path, cats: dict, db: Database):
 
 def load_config() -> dict:
     if CONFIG_FILE.exists():
-        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+        with open(CONFIG_FILE, "r", encoding="utf-8-sig") as f:
             cfg = json.load(f)
         for k, v in DEFAULT_CONFIG.items():
             if k not in cfg: cfg[k] = v
