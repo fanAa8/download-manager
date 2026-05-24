@@ -69,7 +69,7 @@
 
 ```bash
 # 克隆仓库
-git clone https://github.com/你的用户名/download-manager.git
+git clone https://github.com/fanAa8/download-manager.git
 cd download-manager
 
 # 安装依赖
