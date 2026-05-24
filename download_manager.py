@@ -399,33 +399,49 @@ class Classifier:
                         _move_folder_tree(item, dest)
                         continue
 
-                    # 2 types: check correlation
+                    # 2 types: check if one type dominates (>=70%)
                     if types_count == 2:
                         cats = list(non_default_stats.keys())
+                        dominant = max(non_default_stats, key=non_default_stats.get)
+                        dominant_ratio = non_default_stats[dominant] / non_default_count
+                        if dominant_ratio >= 0.7:
+                            # One type clearly dominates, skip correlation logic
+                            dest = dst_path / dominant / item.name
+                            _move_folder_tree(item, dest)
+                            continue
                         winner = _correlation_key(cats[0], cats[1])
                         if winner:
                             # Strong correlation: move entire folder as one unit
                             dest = dst_path / winner / item.name
                             _move_folder_tree(item, dest)
                         else:
-                            # No correlation: move files individually
+                            # No correlation: dominant type inherits folder name, others go flat
+                            dominant = max(non_default_stats, key=non_default_stats.get)
                             for f in item.rglob("*"):
                                 if f.is_file():
                                     cat = self.classify(f.name)
                                     if _should_skip(cat):
                                         continue
-                                    rel = f.relative_to(item)
-                                    _move_file(f, dst_path / cat / rel.parent)
+                                    if cat == dominant:
+                                        rel = f.relative_to(item)
+                                        _move_file(f, dst_path / cat / item.name / rel.parent)
+                                    else:
+                                        _move_file(f, dst_path / cat)
                         continue
 
-                    # 3+ types but not app folder (mixed content): move individually
+                    # 3+ types but not app folder (mixed content):
+                    # Dominant type inherits folder name, others go flat
+                    dominant = max(non_default_stats, key=non_default_stats.get)
                     for f in item.rglob("*"):
                         if f.is_file():
                             cat = self.classify(f.name)
                             if _should_skip(cat):
                                 continue
-                            rel = f.relative_to(item)
-                            _move_file(f, dst_path / cat / rel.parent)
+                            if cat == dominant:
+                                rel = f.relative_to(item)
+                                _move_file(f, dst_path / cat / item.name / rel.parent)
+                            else:
+                                _move_file(f, dst_path / cat)
 
                 else:
                     # copy/move mode: always move individual files, keep structure
