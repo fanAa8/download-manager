@@ -233,35 +233,208 @@ class Classifier:
         return self.default_cat
 
     def organize(self, src: str, dst: str, mode: str = "copy") -> int:
-        """Scan src folder, classify each file, copy/move to dst/{category}/."""
+        """Scan src folder recursively, classify files, copy/move to dst/{category}/.
+
+        Smart mode logic:
+        - 1 type (>=80%): move entire folder as one unit
+        - 2 types with strong correlation (music+cover art, video+subtitle, etc):
+          move entire folder, classify by dominant type
+        - 2 types without correlation: move files individually
+        - 3+ types (likely app install dir): skip, do not touch
+        - Loose files: classify individually
+        """
         import shutil as _shutil
         src_path, dst_path = Path(src), Path(dst)
         if not src_path.is_dir():
             return 0
         count = 0
-        for f in src_path.iterdir():
-            if not f.is_file():
-                continue
-            cat = self.classify(f.name)
-            if cat == self.default_cat and mode == "smart":
-                continue
-            dest_dir = dst_path / cat
+
+        # Strong correlation pairs: (category_a, category_b) -> which one wins
+        # If a folder has these two types, we treat it as a single-type folder
+        STRONG_CORRELATIONS = {
+            ("音乐", "图片"): "音乐",           # album cover art
+            ("音乐", "代码文档相关"): "音乐",    # lyrics files
+            ("视频", "代码文档相关"): "视频",    # subtitles (.srt/.ass)
+            ("视频", "图片"): "视频",            # video thumbnails
+            ("3D打印相关", "图片"): "3D打印相关", # 3D previews
+            ("3D打印相关", "代码文档相关"): "3D打印相关", # gcode/notes
+            ("代码文档相关", "图片"): "代码文档相关", # project with assets
+        }
+
+        def _correlation_key(cat1, cat2):
+            """Check if two categories have strong correlation. Return winner or None."""
+            pair = tuple(sorted([cat1, cat2]))
+            if pair in STRONG_CORRELATIONS:
+                return STRONG_CORRELATIONS[pair]
+            # Check reverse order too
+            for (a, b), winner in STRONG_CORRELATIONS.items():
+                if set([cat1, cat2]) == set([a, b]):
+                    return winner
+            return None
+
+        def _is_app_folder(folder):
+            """Detect if this looks like an application/program folder by scanning file extensions."""
+            APP_EXTS = {".exe", ".msi", ".appx", ".msix", ".bat", ".cmd"}
+            LIB_EXTS = {".dll", ".sys", ".drv", ".ocx", ".ax"}
+            CFG_EXTS = {".ini", ".cfg", ".conf", ".dat"}
+            has_app = False
+            has_lib = False
+            has_cfg = False
+            total = 0
+            for f in folder.rglob("*"):
+                if f.is_file():
+                    total += 1
+                    ext = f.suffix.lower()
+                    if ext in APP_EXTS:
+                        has_app = True
+                    elif ext in LIB_EXTS:
+                        has_lib = True
+                    elif ext in CFG_EXTS:
+                        has_cfg = True
+            if total < 2:
+                return False
+            # Check for uninstaller - strongest app folder indicator
+            for f in folder.rglob("*"):
+                if f.is_file():
+                    name_lower = f.name.lower()
+                    if name_lower.startswith("uninst") or name_lower.startswith("unins"):
+                        return True
+                    if name_lower in ("uninstall.exe", "uninstall.bat", "uninstall.sh",
+                                      "remove.exe", "uninstall"):
+                        return True
+            # exe + dll = definitely app folder
+            if has_app and has_lib:
+                return True
+            # exe + config = likely app folder
+            if has_app and has_cfg:
+                return True
+            return False
+
+        def _should_skip(cat):
+            return cat == self.default_cat and mode == "smart"
+
+        def _move_file(fpath, dest_dir):
+            nonlocal count
             dest_dir.mkdir(parents=True, exist_ok=True)
-            target = dest_dir / f.name
+            target = dest_dir / fpath.name
             if target.exists():
-                stem, suffix = f.stem, f.suffix
-                c = 1
+                stem, suffix = fpath.stem, fpath.suffix
+                c2 = 1
                 while target.exists():
-                    c += 1
-                    target = dest_dir / f"{stem} ({c}){suffix}"
+                    c2 += 1
+                    target = dest_dir / f"{stem} ({c2}){suffix}"
             try:
                 if mode == "move":
-                    _shutil.move(str(f), str(target))
+                    _shutil.move(str(fpath), str(target))
                 else:
-                    _shutil.copy2(str(f), str(target))
+                    _shutil.copy2(str(fpath), str(target))
                 count += 1
             except Exception:
-                continue
+                pass
+
+        def _scan_folder_stats(folder):
+            """Return {category: count} for all files in folder (recursive)."""
+            stats = {}
+            for f in folder.rglob("*"):
+                if f.is_file():
+                    cat = self.classify(f.name)
+                    stats[cat] = stats.get(cat, 0) + 1
+            return stats
+
+        def _move_folder_tree(folder, dest_dir):
+            """Recursively move/copy all files from folder to dest_dir."""
+            nonlocal count
+            for f in folder.rglob("*"):
+                if f.is_file():
+                    rel = f.relative_to(folder)
+                    target_dir = dest_dir / rel.parent
+                    target_dir.mkdir(parents=True, exist_ok=True)
+                    target = target_dir / f.name
+                    if target.exists():
+                        stem, suffix = f.stem, f.suffix
+                        c2 = 1
+                        while target.exists():
+                            c2 += 1
+                            target = target_dir / f"{stem} ({c2}){suffix}"
+                    try:
+                        if mode == "move":
+                            _shutil.move(str(f), str(target))
+                        else:
+                            _shutil.copy2(str(f), str(target))
+                        count += 1
+                    except Exception:
+                        pass
+
+        for item in src_path.iterdir():
+            if item.is_file():
+                cat = self.classify(item.name)
+                if _should_skip(cat):
+                    continue
+                _move_file(item, dst_path / cat)
+
+            elif item.is_dir():
+                stats = _scan_folder_stats(item)
+                total = sum(stats.values())
+                if total == 0:
+                    continue
+
+                # Remove "其他" from stats for decision making
+                non_default_stats = {k: v for k, v in stats.items() if k != self.default_cat}
+                non_default_count = sum(non_default_stats.values())
+                types_count = len(non_default_stats)
+
+                if mode == "smart":
+                    # 3+ types -> likely app/install folder, skip entirely
+                    if _is_app_folder(item):
+                        continue
+
+                    # No meaningful content (all "其他")
+                    if types_count == 0:
+                        continue
+
+                    # 1 type: move entire folder
+                    if types_count == 1:
+                        dominant = list(non_default_stats.keys())[0]
+                        dest = dst_path / dominant / item.name
+                        _move_folder_tree(item, dest)
+                        continue
+
+                    # 2 types: check correlation
+                    if types_count == 2:
+                        cats = list(non_default_stats.keys())
+                        winner = _correlation_key(cats[0], cats[1])
+                        if winner:
+                            # Strong correlation: move entire folder as one unit
+                            dest = dst_path / winner / item.name
+                            _move_folder_tree(item, dest)
+                        else:
+                            # No correlation: move files individually
+                            for f in item.rglob("*"):
+                                if f.is_file():
+                                    cat = self.classify(f.name)
+                                    if _should_skip(cat):
+                                        continue
+                                    rel = f.relative_to(item)
+                                    _move_file(f, dst_path / cat / rel.parent)
+                        continue
+
+                    # 3+ types but not app folder (mixed content): move individually
+                    for f in item.rglob("*"):
+                        if f.is_file():
+                            cat = self.classify(f.name)
+                            if _should_skip(cat):
+                                continue
+                            rel = f.relative_to(item)
+                            _move_file(f, dst_path / cat / rel.parent)
+
+                else:
+                    # copy/move mode: always move individual files, keep structure
+                    for f in item.rglob("*"):
+                        if f.is_file():
+                            cat = self.classify(f.name)
+                            rel = f.relative_to(item)
+                            _move_file(f, dst_path / cat / rel.parent)
+
         return count
 
 
