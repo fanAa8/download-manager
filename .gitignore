@@ -1,0 +1,50 @@
+# Build artifacts
+build/
+dist/
+build_temp/
+*.spec
+__pycache__/
+*.pyc
+*.pyo
+
+# Compiled exe
+*.exe
+
+# Runtime data
+download_manager.db
+download_manager.db-shm
+download_manager.db-wal
+download_manager.log
+config.json
+
+# Backup directories
+backup_*/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*.sublime-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Temp scripts
+_tw_*.py
+gen_*.py
+fix_*.py
+patch*.py
+settings_ui_gen.py
+
+# Logs
+*.log
+build_*.log
+
+# Backup files
+*_backup_*.py
+*_v6_*.md
+tray_fix_*.md
+settings_ui_v*.md
