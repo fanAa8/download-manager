@@ -130,6 +130,7 @@ def _show_settings_window(cfg, cfg_path=None, log=None, version=None):
     LIST_SEL_FG = "white"
 
     root = tk.Tk()
+    root.withdraw()  # Hide immediately to prevent flash
     _settings_win_ref = root
     root.title("\u4e0b\u8f7d\u5206\u7c7b\u7ba1\u5bb6 - \u8bbe\u7f6e")
     root.configure(bg=BG); root.resizable(False, False); root.overrideredirect(False)
@@ -486,6 +487,9 @@ def _show_settings_window(cfg, cfg_path=None, log=None, version=None):
               bg=BTN_BG, fg=FG, relief="flat",
               font=("Microsoft YaHei UI", 9), padx=24, pady=6, cursor="hand2").pack(side="right")
 
+    root.deiconify()  # Show window after all setup
+    root.lift()
+    root.focus_force()
     root.wait_window()
     return result
 
@@ -500,7 +504,18 @@ def setup_tray(db, classifier, cfg, observer, log, version=None, cfg_path=None):
     def _open_settings():
         def _run():
             global _tray_open_lock, _tray_lock_holder
-            try: _show_settings_window(cfg, cfg_path, log, version)
+            # Reload config from disk to show current state
+            try:
+                import json as _json
+                _cfg_path = Path(cfg_path) if cfg_path else None
+                if _cfg_path and _cfg_path.exists():
+                    with open(_cfg_path, "r", encoding="utf-8") as _f:
+                        fresh_cfg = _json.load(_f)
+                else:
+                    fresh_cfg = cfg
+            except Exception:
+                fresh_cfg = cfg
+            try: _show_settings_window(fresh_cfg, cfg_path, log, version)
             except Exception: pass
             finally:
                 try: _tray_open_lock.release(); _tray_lock_holder = False
