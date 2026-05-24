@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 Build standalone exe for Download Manager.
@@ -65,6 +65,7 @@ hidden = [
     "sqlite3",
     "winreg", "ctypes", "ctypes.wintypes",
     "settings_ui",
+    "send2trash",
     "pystray", "pystray._win32",
     "PIL", "PIL.Image", "PIL.ImageDraw",
 ]

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 下载分类管家 - Download Classifier Manager
@@ -23,6 +23,11 @@
 """
 
 import os, sys, json, hashlib, sqlite3, shutil, time, logging, threading, subprocess
+try:
+    from send2trash import send2trash as _send2trash
+    HAS_SEND2TRASH = True
+except ImportError:
+    HAS_SEND2TRASH = False
 from pathlib import Path
 from collections import defaultdict
 try:
@@ -37,7 +42,7 @@ except ImportError:
         except Exception:
             return False
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 try:
     from watchdog.observers import Observer
@@ -494,6 +499,29 @@ def calc_hash(filepath: Path, chunk_size: int = 8388608) -> str:
     except: return ""
     return h.hexdigest()
 
+HASH_THRESHOLD = 524288000  # 500MB
+
+def calculate_smart_hash(file_path: Path) -> str:
+    """智能动态哈希: <500MB全量MD5, >=500MB三点采样(头中尾各1MB)"""
+    try:
+        file_size = os.path.getsize(str(file_path))
+        md5 = hashlib.md5()
+        chunk_size = 1024 * 1024  # 1MB
+        with open(str(file_path), "rb") as f:
+            if file_size < HASH_THRESHOLD:
+                while chunk := f.read(65536):
+                    md5.update(chunk)
+            else:
+                md5.update(f.read(chunk_size))
+                f.seek(file_size // 2 - chunk_size // 2)
+                md5.update(f.read(chunk_size))
+                f.seek(file_size - chunk_size)
+                md5.update(f.read(chunk_size))
+        return md5.hexdigest()
+    except Exception as e:
+        log.error(f"哈希计算异常: {e}")
+        return ""
+
 def is_temp_file(filepath: Path) -> bool:
     """Check if file is a download temp file"""
     name = filepath.name.lower()
@@ -516,8 +544,12 @@ def open_file_location(filepath: Path):
         except Exception:
             pass
 
-def show_toast(title: str, msg: str):
-    """Windows toast notification"""
+def show_toast(title: str, msg: str, click_callback=None, timeout_ms: int = 4000):
+    """Toast notification. click_callback makes it clickable."""
+    if click_callback:
+        t = threading.Thread(target=_clickable_toast, args=(title, msg, click_callback, timeout_ms), daemon=True)
+        t.start()
+        return t
     try:
         ps = (
             'Add-Type -AssemblyName System.Windows.Forms; '
@@ -532,11 +564,67 @@ def show_toast(title: str, msg: str):
         )
         subprocess.run(["powershell", "-Command", ps], capture_output=True, timeout=10, check=False, creationflags=subprocess.CREATE_NO_WINDOW)
     except: pass
+    return None
 
+def _clickable_toast(title: str, msg: str, callback, timeout_ms: int = 4000):
+    """Clickable tkinter toast that auto-closes."""
+    import tkinter as tk
+    try:
+        root = tk.Tk()
+        root.withdraw()
+        root.title(title)
+        root.attributes("-topmost", True)
+        root.resizable(False, False)
+        root.overrideredirect(True)
 
-# ════════════════════════════════════
-#  THEME HELPERS (Win11 dark/light detection)
-# ════════════════════════════════════
+        try:
+            dark = (_detect_win_theme() == "dark")
+        except:
+            dark = False
+        BG = "#2C2C2C" if dark else "#FFFFFF"
+        FG = "#F0F0F0" if dark else "#1A1A1A"
+        BG_H = "#3A3A3A" if dark else "#F0F0F0"
+        FG_SEC = "#888888" if dark else "#666666"
+        BORDER = "#555555" if dark else "#CCCCCC"
+
+        W, H = 380, 62
+        root.update_idletasks()
+        sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
+        root.geometry(f"{W}x{H}+{sw-W-20}+{sh-H-60}")
+        root.configure(bg=BG, highlightthickness=1, highlightbackground=BORDER)
+
+        frame = tk.Frame(root, bg=BG, cursor="hand2")
+        frame.pack(fill="both", expand=True)
+
+        tk.Label(frame, text=title, font=("Microsoft YaHei UI", 9, "bold"),
+                 bg=BG, fg=FG, anchor="w").pack(anchor="w", padx=14, pady=(8, 0))
+        display_msg = msg if len(msg) <= 45 else "\u2026" + msg[-42:]
+        tk.Label(frame, text=display_msg, font=("Microsoft YaHei UI", 8),
+                 bg=BG, fg=FG_SEC, anchor="w").pack(anchor="w", padx=14, pady=(0, 8))
+
+        def on_click(event=None):
+            try: callback()
+            except: pass
+            root.destroy()
+        def on_enter(e):
+            root.configure(bg=BG_H)
+            frame.configure(bg=BG_H)
+            for w in frame.winfo_children(): w.configure(bg=BG_H)
+        def on_leave(e):
+            root.configure(bg=BG)
+            frame.configure(bg=BG)
+            for w in frame.winfo_children(): w.configure(bg=BG)
+
+        frame.bind("<Button-1>", on_click)
+        for w in frame.winfo_children(): w.bind("<Button-1>", on_click)
+        frame.bind("<Enter>", on_enter)
+        frame.bind("<Leave>", on_leave)
+
+        root.after(timeout_ms, root.destroy)
+        root.deiconify()
+        root.mainloop()
+    except Exception:
+        pass
 
 def _detect_win_theme() -> str:
     """Detect Windows light/dark theme via Registry."""
@@ -886,45 +974,62 @@ class DownloadHandler(FileSystemEventHandler):
             with self.p_lock: self.processing.discard(str(fp))
 
     def _check_duplicate(self, fp: Path, name: str, size: int, early_matches: list) -> str:
-        """Check duplicates. Returns 'skip', 'rename', or '' """
+        """
+        智能查重引擎 v1.1
+        返回: 'skip'(已删除重复) | 'rename'(保留副本重命名) | ''(放行)
+        """
         precise = self.db.find_by_name_and_size(name, size)
         existing = precise[0] if precise else (early_matches[0] if early_matches else None)
         if not existing: return ""
 
+        existing_path = Path(existing["path"])
         log.warning(f"📣 疑似重复: {name} ({size/1048576:.1f}MB)")
-        log.warning(f"  已有: {existing['path']}")
+        log.warning(f"  已有: {existing_path}")
 
-        h = ""
-        min_hash = self.config.get("min_file_size_for_hash", 1024)
-        if size >= min_hash:
-            try: h = calc_hash(fp, self.config.get("hash_chunk_size", 8388608))
-            except: pass
+        # Step 1: 大小比对（零成本）
+        existing_size = existing.get("size", 0)
+        if existing_size and size != existing_size:
+            log.info(f"  ✅ 大小不同，视为新文件")
+            return ""
 
-        hash_confirmed = False
-        if h and existing.get("hash"):
-            hash_confirmed = (h == existing["hash"])
-        elif h:
-            matches = self.db.find_by_hash(h)
-            hash_confirmed = bool(matches)
+        # Step 2: 动态哈希
+        new_hash = calculate_smart_hash(fp)
+        exist_hash = existing.get("hash", "")
+        if not exist_hash and existing_path.exists():
+            exist_hash = calculate_smart_hash(existing_path)
 
+        hash_confirmed = bool(new_hash and exist_hash and new_hash == exist_hash)
         status = "✅ 哈希确认重复" if hash_confirmed else "⚠️ 仅文件名大小匹配"
-        log.info(f"  {status}")
+        log.info(f"  {status} (MD5: {new_hash[:12]}...)")
 
-        with self.dialog_lock:
-            action = dup_dialog(name, fp, existing)
-
-        if action == "skip":
+        if hash_confirmed:
+            # 铁证重复！执行删除
+            hard_delete = self.config.get("hard_delete_duplicates", False)
             try:
-                fp.unlink()
-                log.info(f"❌ 已删除重复: {name}")
-            except: pass
-            open_file_location(Path(existing["path"]))
-            show_toast("已跳过重复", existing["path"])
+                if hard_delete:
+                    os.remove(str(fp))
+                    log.info(f"🗑️ 已彻底删除: {name}")
+                    toast_title = "已彻底删除重复文件"
+                elif HAS_SEND2TRASH:
+                    _send2trash(str(fp))
+                    log.info(f"♻️ 已移入回收站: {name}")
+                    toast_title = "已移入回收站"
+                else:
+                    os.remove(str(fp))
+                    log.info(f"🗑️ 已删除: {name} (send2trash不可用)")
+                    toast_title = "已删除重复文件"
+            except Exception as e:
+                log.error(f"删除失败: {e}")
+                return "rename"
+
+            toast_msg = f"点击定位已有文件 → {existing_path.name}"
+            show_toast(toast_title, toast_msg,
+                       click_callback=lambda: open_file_location(existing_path),
+                       timeout_ms=5000)
             return "skip"
         else:
             show_toast("保留副本", f"{name} → 自动重命名")
             return "rename"
-
     def _do_rename(self, fp: Path, name: str) -> tuple:
         stem = Path(name).stem
         suffix = Path(name).suffix

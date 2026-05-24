@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """System tray icon + Settings UI for Download Manager."""
 
@@ -468,6 +468,7 @@ def _show_settings_window(cfg, cfg_path=None, log=None, version=None):
         new_cfg["watch_folders"] = wf_list
         new_cfg["target_base"] = tf_var.get().strip()
         new_cfg["time_saving"] = time_var.get()
+        new_cfg["hard_delete_duplicates"] = hard_del_var.get()
         if "watch_path" in new_cfg: del new_cfg["watch_path"]
         try:
             with open(cfg_path, "w", encoding="utf-8") as cf:
