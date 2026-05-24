@@ -854,6 +854,9 @@ class DownloadHandler(FileSystemEventHandler):
         self.processing = set()
         self.p_lock = threading.Lock()
         self.dialog_lock = threading.Lock()
+        self.pending_files = set()
+        self.settle_timer = None
+        self.settle_lock = threading.Lock()
 
     def on_created(self, event):
         if event.is_directory:
@@ -883,12 +886,49 @@ class DownloadHandler(FileSystemEventHandler):
                 return
         except ValueError: pass
 
-        t = threading.Thread(target=self._process_file, args=(fp,), daemon=True)
-        t.start()
+        with self.settle_lock:
+            self.pending_files.add(str(fp))
+            if self.settle_timer:
+                self.settle_timer.cancel()
+            settle_sec = self.config.get("settle_window", 3)
+            self.settle_timer = threading.Timer(settle_sec, self._settle_tick)
+            self.settle_timer.daemon = True
+            self.settle_timer.start()
+            log.info(f"\u23f3 Pending: {fp.name} (settle {settle_sec}s)")
+
+    def _settle_tick(self):
+        """Settle period expired, batch-process all pending files"""
+        with self.settle_lock:
+            files = list(self.pending_files)
+            self.pending_files.clear()
+        if not files:
+            return
+        log.info(f"\U0001f680 Batch processing {len(files)} files after settle")
+        for fp_str in files:
+            t = threading.Thread(target=self._process_file, args=(Path(fp_str),), daemon=True)
+            t.start()
 
     def _handle_batch_folder(self, folder: Path):
-        """Detect cloud drive batch folder downloads"""
-        time.sleep(self.config.get("batch_window", 15))
+        """Detect cloud drive batch folder downloads - wait for download complete"""
+        batch_window = self.config.get("batch_window", 15)
+        max_wait = self.config.get("batch_max_wait", 300)
+        elapsed = 0
+
+        time.sleep(min(batch_window, max_wait))
+
+        while elapsed < max_wait:
+            if not folder.exists(): return
+            has_temp = any(
+                is_temp_file(f) for f in folder.rglob("*") if f.is_file()
+            )
+            if not has_temp:
+                break
+            time.sleep(2)
+            elapsed += 2
+            log.info(f"Waiting for {folder.name} downloads... ({elapsed}s)")
+        else:
+            log.warning(f"{folder.name}: max wait {max_wait}s, processing anyway")
+
         if not folder.exists(): return
 
         try:
