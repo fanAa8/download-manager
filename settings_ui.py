@@ -431,9 +431,15 @@ def _show_settings_window(cfg, cfg_path=None, log=None, version=None):
                    font=("Microsoft YaHei UI", 10), bg=BG, fg=FG, selectcolor=BG,
                    activebackground=BG, activeforeground=FG,
                    highlightthickness=0, relief="flat", cursor="hand2").pack(anchor="w", pady=2)
-    tk.Checkbutton(gf, text="\u7701\u65f6\u6a21\u5f0f\uff08\u8df3\u8fc7\u65e0\u6cd5\u8bc6\u522b\u7684\u6587\u4ef6\uff09", variable=time_var,
+    tk.Checkbutton(gf, text="\u6574\u7406\u65f6\u4e0d\u6574\u7406\u5b50\u76ee\u5f55\u4e2d\u7684\u6587\u4ef6", variable=time_var,
                    font=("Microsoft YaHei UI", 10), bg=BG, fg=FG, selectcolor=BG,
                    activebackground=BG, activeforeground=FG,
+                   highlightthickness=0, relief="flat", cursor="hand2").pack(anchor="w", pady=2)
+
+    hard_del_var = tk.BooleanVar(value=new_cfg.get("hard_delete_duplicates", False))
+    tk.Checkbutton(gf, text="彻底删除重复文件（检测到重复时直接删除，不进回收站）", variable=hard_del_var,
+                   font=("Microsoft YaHei UI", 10), bg=BG, fg="#E53935", selectcolor=BG,
+                   activebackground=BG, activeforeground="#E53935",
                    highlightthickness=0, relief="flat", cursor="hand2").pack(anchor="w", pady=2)
 
     # Save/Cancel

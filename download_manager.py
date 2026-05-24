@@ -247,7 +247,7 @@ class Classifier:
         - 2 types without correlation: move files individually
         - 3+ types (likely app install dir): skip, do not touch
         - Loose files: classify individually
-        - time_saving=True: skip folders containing subdirectories (只处理顶层)
+        - time_saving=True: 整理时不整理子目录中的文件
         """
         import shutil as _shutil
         src_path, dst_path = Path(src), Path(dst)
@@ -912,7 +912,9 @@ class DownloadHandler(FileSystemEventHandler):
                 log.info(f"📂 无法判定: {folder.name} → 其他")
             else:
                 log.info(f"📦 文件夹归类: {folder.name} → {cat}/")
-            show_toast("批量文件夹已分类", f"{folder.name} → {cat}")
+            show_toast("批量文件夹已分类", f"{folder.name} → {cat}",
+                        click_callback=lambda d=dest: open_file_location(d),
+                        timeout_ms=4000)
             for f in dest.rglob("*"):
                 if f.is_file() and not is_temp_file(f):
                     try:
@@ -970,7 +972,9 @@ class DownloadHandler(FileSystemEventHandler):
                 try: h = calc_hash(target, self.config.get("hash_chunk_size", 8388608))
                 except: pass
             self.db.add_file(h, name, size, fp2, cat)
-            show_toast("文件已分类", f"{name} → {cat}")
+            show_toast("文件已分类", f"{name} → {cat}",
+                       click_callback=lambda tp=target: open_file_location(tp),
+                       timeout_ms=4000)
 
         except Exception as e:
             log.error(f"处理出错 {fp}: {e}")
