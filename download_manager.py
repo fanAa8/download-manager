@@ -416,13 +416,16 @@ class Classifier:
                             _move_folder_tree(item, dest)
                         else:
                             # No correlation: dominant type inherits folder name, others go flat
+                            # If no type >= 50%, everyone goes flat
                             dominant = max(non_default_stats, key=non_default_stats.get)
+                            dominant_ratio = non_default_stats[dominant] / non_default_count
+                            inherit = dominant_ratio >= 0.5
                             for f in item.rglob("*"):
                                 if f.is_file():
                                     cat = self.classify(f.name)
                                     if _should_skip(cat):
                                         continue
-                                    if cat == dominant:
+                                    if inherit and cat == dominant:
                                         rel = f.relative_to(item)
                                         _move_file(f, dst_path / cat / item.name / rel.parent)
                                     else:
@@ -431,13 +434,16 @@ class Classifier:
 
                     # 3+ types but not app folder (mixed content):
                     # Dominant type inherits folder name, others go flat
+                    # If no type >= 50%, everyone goes flat
                     dominant = max(non_default_stats, key=non_default_stats.get)
+                    dominant_ratio = non_default_stats[dominant] / non_default_count
+                    inherit = dominant_ratio >= 0.5
                     for f in item.rglob("*"):
                         if f.is_file():
                             cat = self.classify(f.name)
                             if _should_skip(cat):
                                 continue
-                            if cat == dominant:
+                            if inherit and cat == dominant:
                                 rel = f.relative_to(item)
                                 _move_file(f, dst_path / cat / item.name / rel.parent)
                             else:
