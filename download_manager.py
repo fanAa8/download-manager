@@ -22,7 +22,7 @@
   python download_manager.py --stats      # 显示统计
 """
 
-import os, sys, json, hashlib, sqlite3, shutil, time, logging, threading, subprocess
+import os, sys, json, hashlib, sqlite3, shutil, time, logging, threading, subprocess, socket
 try:
     from send2trash import send2trash as _send2trash
     HAS_SEND2TRASH = True
@@ -237,7 +237,7 @@ class Classifier:
             pass
         return self.default_cat
 
-    def organize(self, src: str, dst: str, mode: str = "copy", time_saving: bool = False) -> int:
+    def organize(self, src: str, dst: str, mode: str = "copy", time_saving: bool = False, is_manual: bool = False) -> int:
         """Scan src folder recursively, classify files, copy/move to dst/{category}/.
 
         Smart mode logic:
@@ -504,6 +504,15 @@ def calc_hash(filepath: Path, chunk_size: int = 8388608) -> str:
     return h.hexdigest()
 
 HASH_THRESHOLD = 524288000  # 500MB
+
+def is_internet_available() -> bool:
+    """超轻量网络检测: socket连接阿里DNS, 1秒超时"""
+    try:
+        socket.create_connection(("223.5.5.5", 53), timeout=1)
+        return True
+    except OSError:
+        return False
+
 
 def calculate_smart_hash(file_path: Path) -> str:
     """智能动态哈希: <500MB全量MD5, >=500MB三点采样(头中尾各1MB)"""
@@ -995,6 +1004,13 @@ class DownloadHandler(FileSystemEventHandler):
             while dest.exists():
                 c += 1
                 dest = self.target / cat / f"{folder.name} ({c})"
+
+        # 断网保护: 移动前检查网络
+        if not is_internet_available():
+            log.warning(f"\U0001f517 Network down, suspending: {folder.name}")
+            show_toast("网络已断开", f"{folder.name} 自动整理已暂停，防止文件损坏",
+                        timeout_ms=5000)
+            return
 
         try:
             smart_move(folder, dest)
