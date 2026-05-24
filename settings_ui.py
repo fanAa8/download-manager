@@ -406,7 +406,7 @@ def _show_settings_window(cfg, cfg_path=None, log=None, version=None):
             clf = Classifier(cat_config)
             total = 0
             for src in wf_list:
-                if os.path.isdir(src): total += clf.organize(src, dst, mode=mode)
+                if os.path.isdir(src): total += clf.organize(src, dst, mode=mode, time_saving=new_cfg.get("time_saving", False))
             mc = {"copy": "\u590d\u5236", "move": "\u79fb\u52a8", "smart": "\u667a\u80fd"}.get(mode, mode)
             messagebox.showinfo("\u6574\u7406\u5b8c\u6210", f"\u5df2\u5904\u7406 {total} \u4e2a\u6587\u4ef6 - \u6a21\u5f0f: {mc}", parent=root)
         except Exception as e:

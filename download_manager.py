@@ -237,7 +237,7 @@ class Classifier:
             pass
         return self.default_cat
 
-    def organize(self, src: str, dst: str, mode: str = "copy") -> int:
+    def organize(self, src: str, dst: str, mode: str = "copy", time_saving: bool = False) -> int:
         """Scan src folder recursively, classify files, copy/move to dst/{category}/.
 
         Smart mode logic:
@@ -247,6 +247,7 @@ class Classifier:
         - 2 types without correlation: move files individually
         - 3+ types (likely app install dir): skip, do not touch
         - Loose files: classify individually
+        - time_saving=True: skip folders containing subdirectories (只处理顶层)
         """
         import shutil as _shutil
         src_path, dst_path = Path(src), Path(dst)
@@ -392,6 +393,9 @@ class Classifier:
                 _move_file(item, dst_path / cat)
 
             elif item.is_dir():
+                # 省时模式: 跳过包含子目录的文件夹
+                if time_saving and any(d.is_dir() for d in item.iterdir() if d.is_dir()):
+                    continue
                 stats = _scan_folder_stats(item)
                 total = sum(stats.values())
                 if total == 0:
