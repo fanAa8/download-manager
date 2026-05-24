@@ -908,26 +908,76 @@ class DownloadHandler(FileSystemEventHandler):
             t = threading.Thread(target=self._process_file, args=(Path(fp_str),), daemon=True)
             t.start()
 
+    @staticmethod
+    def _folder_size(folder: Path) -> int:
+        """高效计算文件夹总大小"""
+        total = 0
+        try:
+            for entry in os.scandir(folder):
+                try:
+                    if entry.is_file(follow_symlinks=False):
+                        total += entry.stat(follow_symlinks=False).st_size
+                    elif entry.is_dir(follow_symlinks=False):
+                        total += DownloadHandler._folder_size(Path(entry.path))
+                except (OSError, PermissionError):
+                    pass
+        except (OSError, PermissionError):
+            pass
+        return total
+
+    @staticmethod
+    def _is_folder_unlocked(folder: Path) -> bool:
+        """检查文件夹内所有文件是否都没有被系统占用"""
+        try:
+            for entry in os.scandir(folder):
+                try:
+                    if entry.is_file(follow_symlinks=False):
+                        fd = os.open(entry.path, os.O_RDWR | os.O_EXCL)
+                        os.close(fd)
+                    elif entry.is_dir(follow_symlinks=False):
+                        if not DownloadHandler._is_folder_unlocked(Path(entry.path)):
+                            return False
+                except (OSError, PermissionError):
+                    return False
+        except (OSError, PermissionError):
+            return False
+        return True
+
     def _handle_batch_folder(self, folder: Path):
-        """Detect cloud drive batch folder downloads - wait for download complete"""
+        """Detect cloud drive batch folder downloads - volume stability check"""
         batch_window = self.config.get("batch_window", 15)
         max_wait = self.config.get("batch_max_wait", 300)
         elapsed = 0
 
         time.sleep(min(batch_window, max_wait))
 
+        # 体积稳定率检测
+        prev_size = self._folder_size(folder)
+        unchanged_count = 0
+        check_interval = 2
+
         while elapsed < max_wait:
             if not folder.exists(): return
-            has_temp = any(
-                is_temp_file(f) for f in folder.rglob("*") if f.is_file()
-            )
-            if not has_temp:
-                break
-            time.sleep(2)
-            elapsed += 2
-            log.info(f"Waiting for {folder.name} downloads... ({elapsed}s)")
+            time.sleep(check_interval)
+            elapsed += check_interval
+
+            curr_size = self._folder_size(folder)
+            unlocked = self._is_folder_unlocked(folder)
+
+            if curr_size == prev_size and unlocked:
+                unchanged_count += 1
+                log.info(f"{folder.name}: size stable ({curr_size} bytes), check {unchanged_count}/2")
+                if unchanged_count >= 2:
+                    break
+            else:
+                if curr_size != prev_size:
+                    log.info(f"{folder.name}: size changed {prev_size} -> {curr_size}")
+                if not unlocked:
+                    log.info(f"{folder.name}: files still locked")
+                unchanged_count = 0
+                prev_size = curr_size
         else:
-            log.warning(f"{folder.name}: max wait {max_wait}s, processing anyway")
+            log.warning(f"{folder.name}: max wait {max_wait}s reached, processing anyway")
 
         if not folder.exists(): return
 
