@@ -259,6 +259,7 @@ class Classifier:
             ("3D打印相关", "图片"): "3D打印相关", # 3D previews
             ("3D打印相关", "代码文档相关"): "3D打印相关", # gcode/notes
             ("代码文档相关", "图片"): "代码文档相关", # project with assets
+            ("可安装exe", "压缩包"): "压缩包", # software installer bundle
         }
 
         def _correlation_key(cat1, cat2):
@@ -271,6 +272,19 @@ class Classifier:
                 if set([cat1, cat2]) == set([a, b]):
                     return winner
             return None
+
+        def _is_installer_bundle(folder):
+            """Check if folder contains exe + compressed files (software installer)."""
+            has_exe = False
+            has_compressed = False
+            for f in folder.rglob("*"):
+                if f.is_file():
+                    cat = self.classify(f.name)
+                    if cat == "可安装exe":
+                        has_exe = True
+                    elif cat == "压缩包":
+                        has_compressed = True
+            return has_exe and has_compressed
 
         def _is_app_folder(folder):
             """Detect if this looks like an application/program folder by scanning file extensions."""
@@ -432,8 +446,12 @@ class Classifier:
                                         _move_file(f, dst_path / cat)
                         continue
 
-                    # 3+ types but not app folder (mixed content):
-                    # Dominant type inherits folder name, others go flat
+                    # 3+ types but not app folder:
+                    # Check for installer bundle (exe + compressed)
+                    if _is_installer_bundle(item):
+                        _move_folder_tree(item, dst_path / "压缩包" / item.name)
+                        continue
+                    # Mixed content: dominant type inherits folder name, others go flat
                     # If no type >= 50%, everyone goes flat
                     dominant = max(non_default_stats, key=non_default_stats.get)
                     dominant_ratio = non_default_stats[dominant] / non_default_count
