@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 下载分类管家 - Download Classifier Manager
@@ -1005,8 +1005,9 @@ class DownloadHandler(FileSystemEventHandler):
                 c += 1
                 dest = self.target / cat / f"{folder.name} ({c})"
 
-        # 断网保护: 移动前检查网络
-        if not is_internet_available():
+        # 断网保护: 移动前检查网络（>=500MB 的文件夹才检查）
+        folder_size = self._folder_size(folder)
+        if folder_size >= HASH_THRESHOLD and not is_internet_available():
             log.warning(f"\U0001f517 Network down, suspending: {folder.name}")
             show_toast("网络已断开", f"{folder.name} 自动整理已暂停，防止文件损坏",
                         timeout_ms=5000)
@@ -1045,6 +1046,13 @@ class DownloadHandler(FileSystemEventHandler):
             info = fp.stat()
             size = info.st_size
             if size == 0: return
+
+            # 断网保护: >=500MB 文件移动前检查网络
+            if size >= HASH_THRESHOLD and not is_internet_available():
+                log.warning(f"Network down, suspending: {name}")
+                show_toast("网络已断开", f"{name} 自动整理已暂停，防止文件损坏",
+                           timeout_ms=5000)
+                return
 
             dup_action = self._check_duplicate(fp, name, size, early_matches)
             if dup_action == "skip":
