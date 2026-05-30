@@ -124,6 +124,8 @@ def _show_settings_window(cfg, cfg_path=None, log=None, version=None):
     TAG_FG = "#C0C0C0" if dark else "#444444"
     MUTED = "#8A8A8A" if dark else "#707070"
     BORDER = "#3A3A3A" if dark else "#D0D0D0"
+    WARNING_BG = "#2B1B1B" if dark else "#FFF4F4"
+    WARNING_BORDER = "#663030" if dark else "#F0B8B8"
     DEL_BTN = "#E53935"
     SAVE_BTN = "#2E7D32"
     LIST_SEL_BG = ACCENT
@@ -133,22 +135,13 @@ def _show_settings_window(cfg, cfg_path=None, log=None, version=None):
     root.withdraw()  # Hide immediately to prevent flash
     _settings_win_ref = root
     root.title("\u4e0b\u8f7d\u5206\u7c7b\u7ba1\u5bb6 - \u8bbe\u7f6e")
-    root.configure(bg=BG); root.resizable(False, False); root.overrideredirect(False)
+    root.configure(bg=BG); root.resizable(True, True); root.overrideredirect(False)
     _set_dark_titlebar(root)
-    # Hide maximize button
-    try:
-        import ctypes
-        hwnd = root.winfo_id()
-        GWL_STYLE = -16
-        WS_MAXIMIZEBOX = 0x00010000
-        style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_STYLE)
-        ctypes.windll.user32.SetWindowLongW(hwnd, GWL_STYLE, style & ~WS_MAXIMIZEBOX)
-    except Exception:
-        pass
     root.update_idletasks()
     sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
-    w, h = 640, 560
+    w, h = 700, 580
     root.geometry(f"{w}x{h}+{(sw-w)//2}+{(sh-h)//2}")
+    root.minsize(640, 560)
 
     def _on_close():
         global _settings_win_ref, _tray_open_lock, _tray_lock_holder
@@ -159,17 +152,18 @@ def _show_settings_window(cfg, cfg_path=None, log=None, version=None):
         root.quit(); root.destroy(); _settings_win_ref = None
     root.protocol("WM_DELETE_WINDOW", _on_close)
 
-    style = ttk.Style(); style.theme_use("clam")
-    style.configure("TNotebook", background=BG, borderwidth=0)
-    style.configure("TNotebook.Tab", font=("Microsoft YaHei UI", 9, "bold"), padding=[16, 6])
-    style.map("TNotebook.Tab", background=[("selected", "white")], foreground=[("selected", "black")], expand=[("selected", [2, 2, 2, 2])])
-    nb = ttk.Notebook(root)
-    nb.pack(fill="both", expand=True, padx=0, pady=0)
+    main = tk.Frame(root, bg=BG)
+    main.pack(fill="both", expand=True)
+    nav = tk.Frame(main, bg=BG)
+    nav.pack(fill="x", padx=20, pady=(12, 0))
+    body = tk.Frame(main, bg=BG, highlightbackground=BORDER, highlightthickness=1)
+    body.pack(fill="both", expand=True, padx=0, pady=(0, 0))
+    tab_buttons = {}
 
     # ================================================================
     # Tab 1: Categories - left list + right detail
     # ================================================================
-    tab_cat = tk.Frame(nb, bg=BG); nb.add(tab_cat, text="\u5206\u7c7b\u7ba1\u7406")
+    tab_cat = tk.Frame(body, bg=BG)
 
     # Paned layout
     pane = tk.Frame(tab_cat, bg=BG)
@@ -206,19 +200,45 @@ def _show_settings_window(cfg, cfg_path=None, log=None, version=None):
     # Detail inner content (rebuilt on selection)
     detail_inner = tk.Frame(detail_frame, bg=CARD_BG)
     detail_inner.pack(fill="both", expand=True, padx=16, pady=16)
+    detail_state = {"cname": None, "name_var": None, "ext_text": None}
 
-    def _refresh_list():
-        selected_name = None
-        sel = cat_listbox.curselection()
-        if sel:
-            idx = sel[0]
-            names = list(new_cfg["categories"].keys())
-            if 0 <= idx < len(names):
-                selected_name = names[idx]
+    def _category_exts(cname):
+        data = new_cfg["categories"].get(cname, [])
+        if isinstance(data, dict):
+            return list(data.get("extensions", []))
+        if isinstance(data, list):
+            return list(data)
+        return []
+
+    def _parse_exts(raw):
+        for sep in [",", "\uff0c", ";", "\uff1b", "\n", "\t"]:
+            raw = raw.replace(sep, " ")
+        exts, seen = [], set()
+        for item in raw.split():
+            ext = item.strip().lower()
+            if not ext:
+                continue
+            ext = ext if ext.startswith(".") else "." + ext
+            if ext != "." and ext not in seen:
+                exts.append(ext)
+                seen.add(ext)
+        return exts
+
+    def _format_exts(exts):
+        return " ".join(exts)
+
+    def _refresh_list(selected_name=None):
+        if selected_name is None:
+            sel = cat_listbox.curselection()
+            if sel:
+                idx = sel[0]
+                names = list(new_cfg["categories"].keys())
+                if 0 <= idx < len(names):
+                    selected_name = names[idx]
         cat_listbox.delete(0, tk.END)
         for name in new_cfg["categories"]:
             cat_listbox.insert(tk.END, name)
-        # Re-select if still exists
+        cat_listbox.selection_clear(0, tk.END)
         if selected_name:
             names = list(new_cfg["categories"].keys())
             if selected_name in names:
@@ -226,20 +246,55 @@ def _show_settings_window(cfg, cfg_path=None, log=None, version=None):
                 cat_listbox.selection_set(idx)
                 cat_listbox.see(idx)
 
+    def _replace_category(old_name, new_name, exts):
+        rebuilt = {}
+        for name, value in new_cfg["categories"].items():
+            if name == old_name:
+                rebuilt[new_name] = exts
+            else:
+                rebuilt[name] = value
+        new_cfg["categories"] = rebuilt
+
+    def _commit_detail():
+        old_name = detail_state.get("cname")
+        name_var = detail_state.get("name_var")
+        ext_text = detail_state.get("ext_text")
+        if not old_name or not name_var or not ext_text or old_name not in new_cfg["categories"]:
+            return True
+        locked = (old_name == "\u5176\u4ed6")
+        new_name = old_name if locked else name_var.get().strip()
+        if not new_name:
+            messagebox.showwarning("\u63d0\u793a", "\u5206\u7c7b\u540d\u79f0\u4e0d\u80fd\u4e3a\u7a7a", parent=root)
+            return False
+        if new_name != old_name and new_name in new_cfg["categories"]:
+            messagebox.showwarning("\u91cd\u590d", f"\u300c{new_name}\u300d\u5df2\u5b58\u5728", parent=root)
+            return False
+        new_exts = _parse_exts(ext_text.get("1.0", "end"))
+        if new_name != old_name:
+            _replace_category(old_name, new_name, new_exts)
+            detail_state["cname"] = new_name
+        else:
+            new_cfg["categories"][new_name] = new_exts
+        _refresh_list(new_name)
+        return True
+
     def _show_detail(cname):
         for w in detail_inner.winfo_children(): w.destroy()
         if cname is None or cname not in new_cfg["categories"]:
+            detail_state.update({"cname": None, "name_var": None, "ext_text": None})
             tk.Label(detail_inner, text="\u8bf7\u9009\u62e9\u4e00\u4e2a\u5206\u7c7b",
                      font=("Microsoft YaHei UI", 10), bg=CARD_BG, fg=MUTED).pack(expand=True)
             return
 
-        exts = new_cfg["categories"][cname]
+        exts = _category_exts(cname)
         locked = (cname == "\u5176\u4ed6")
+        detail_state["cname"] = cname
 
         # Category name
         tk.Label(detail_inner, text="\u5206\u7c7b\u540d\u79f0",
                  font=("Microsoft YaHei UI", 9), bg=CARD_BG, fg=MUTED).pack(anchor="w", pady=(0, 2))
         name_var = tk.StringVar(value=cname)
+        detail_state["name_var"] = name_var
         name_entry = tk.Entry(detail_inner, textvariable=name_var, font=("Microsoft YaHei UI", 10),
                               bg=ENTRY_BG, fg=FG, insertbackground=FG, relief="flat",
                               highlightbackground=BORDER, highlightthickness=1)
@@ -250,41 +305,28 @@ def _show_settings_window(cfg, cfg_path=None, log=None, version=None):
         # Extensions
         tk.Label(detail_inner, text="\u5305\u542b\u6587\u4ef6\u62d3\u5c55\u540d",
                  font=("Microsoft YaHei UI", 9), bg=CARD_BG, fg=MUTED).pack(anchor="w", pady=(0, 2))
-        ext_var = tk.StringVar(value=" ".join(exts) if exts else "")
-        ext_entry = tk.Entry(detail_inner, textvariable=ext_var, font=("Microsoft YaHei UI", 9),
-                             bg=ENTRY_BG, fg=FG, insertbackground=FG, relief="flat",
-                             highlightbackground=BORDER, highlightthickness=1)
-        ext_entry.pack(fill="x", ipady=4, pady=(0, 2))
-        tk.Label(detail_inner, text="\u62d3\u5c55\u540d\u8bf7\u7528\u9017\u53f7\u5206\u9694\uff0c\u4f8b\u5982\uff1a.zip, .rar, .pdf",
-                 font=("Microsoft YaHei UI", 9), bg=CARD_BG, fg=MUTED).pack(anchor="w", pady=(0, 16))
+        ext_frame = tk.Frame(detail_inner, bg=ENTRY_BG, highlightbackground=BORDER, highlightthickness=1)
+        ext_frame.pack(fill="both", expand=True, pady=(0, 6))
+        ext_text = tk.Text(ext_frame, height=8, wrap="word", font=("Microsoft YaHei UI", 9),
+                           bg=ENTRY_BG, fg=FG, insertbackground=FG, relief="flat",
+                           bd=0, padx=8, pady=8, undo=True)
+        ext_scroll = tk.Scrollbar(ext_frame, orient="vertical", command=ext_text.yview)
+        ext_text.configure(yscrollcommand=ext_scroll.set)
+        ext_text.pack(side="left", fill="both", expand=True)
+        ext_scroll.pack(side="right", fill="y")
+        ext_text.insert("1.0", _format_exts(exts))
+        detail_state["ext_text"] = ext_text
 
-        # OK / Cancel buttons
-        def _on_ok():
-            new_name = name_var.get().strip()
-            new_exts_str = ext_var.get().strip()
-            new_exts = [x.strip().lstrip(".") for x in new_exts_str.split() if x.strip()]
-            new_exts = ["." + e if not e.startswith(".") else e for e in new_exts]
-            if not new_name: return
-            if new_name != cname:
-                if new_name in new_cfg["categories"]:
-                    messagebox.showwarning("\u91cd\u590d", f"\u300c{new_name}\u300d\u5df2\u5b58\u5728", parent=root)
-                    return
-                del new_cfg["categories"][cname]
-            new_cfg["categories"][new_name] = new_exts
-            _refresh_list()
-            _show_detail(new_name)
-
-        def _on_cancel():
-            _show_detail(cname)
-
-        ctrl = tk.Frame(detail_inner, bg=CARD_BG)
-        ctrl.pack(fill="x", side="bottom", pady=(8, 0))
-        tk.Button(ctrl, text="\u53d6\u6d88", command=_on_cancel,
-                  bg=BTN_BG, fg=FG, relief="flat",
-                  font=("Microsoft YaHei UI", 9), padx=20, pady=4, cursor="hand2").pack(side="right", padx=(6, 0))
-        tk.Button(ctrl, text="\u786e\u5b9a", command=_on_ok,
-                  bg=ACCENT, fg="white", relief="flat",
-                  font=("Microsoft YaHei UI", 9, "bold"), padx=20, pady=4, cursor="hand2").pack(side="right")
+        meta_var = tk.StringVar()
+        def _update_ext_meta(event=None):
+            count = len(_parse_exts(ext_text.get("1.0", "end")))
+            meta_var.set(f"{count} \u4e2a\u6269\u5c55\u540d")
+        ext_text.bind("<KeyRelease>", _update_ext_meta)
+        tk.Label(detail_inner, textvariable=meta_var,
+                 font=("Microsoft YaHei UI", 9), bg=CARD_BG, fg=MUTED).pack(anchor="w")
+        tk.Label(detail_inner, text="\u53ef\u7528\u7a7a\u683c\u3001\u9017\u53f7\u6216\u6362\u884c\u5206\u9694",
+                 font=("Microsoft YaHei UI", 9), bg=CARD_BG, fg=MUTED).pack(anchor="w", pady=(2, 0))
+        _update_ext_meta()
 
     def _on_list_select(event=None):
         sel = cat_listbox.curselection()
@@ -292,12 +334,22 @@ def _show_settings_window(cfg, cfg_path=None, log=None, version=None):
             names = list(new_cfg["categories"].keys())
             idx = sel[0]
             if 0 <= idx < len(names):
-                _show_detail(names[idx])
+                selected = names[idx]
+                if selected == detail_state.get("cname"):
+                    return
+                previous = detail_state.get("cname")
+                if not _commit_detail():
+                    _refresh_list(previous)
+                    return
+                _refresh_list(selected)
+                _show_detail(selected)
 
     cat_listbox.bind("<<ListboxSelect>>", _on_list_select)
 
     # Add button
     def _add_cat():
+        if not _commit_detail():
+            return
         base = "\u65b0\u5efa\u5206\u7c7b"; n = base; i = 1
         while n in new_cfg["categories"]: i += 1; n = f"{base}{i}"
         new_cfg["categories"][n] = []
@@ -321,6 +373,7 @@ def _show_settings_window(cfg, cfg_path=None, log=None, version=None):
         if messagebox.askyesno("\u786e\u8ba4\u5220\u9664", f"\u78ee\u5b9a\u5220\u9664\u5206\u7c7b\u300c{name}\u300d\uff1f", parent=root):
             del new_cfg["categories"][name]
             _refresh_list()
+            detail_state.update({"cname": None, "name_var": None, "ext_text": None})
             for w in detail_inner.winfo_children(): w.destroy()
             tk.Label(detail_inner, text="\u8bf7\u9009\u62e9\u4e00\u4e2a\u5206\u7c7b",
                      font=("Microsoft YaHei UI", 10), bg=CARD_BG, fg=MUTED).pack(expand=True)
@@ -343,7 +396,7 @@ def _show_settings_window(cfg, cfg_path=None, log=None, version=None):
     # ================================================================
     # Tab 2: General Settings
     # ================================================================
-    tab_gen = tk.Frame(nb, bg=BG); nb.add(tab_gen, text="\u901a\u7528\u8bbe\u7f6e")
+    tab_gen = tk.Frame(body, bg=BG)
     gf = tk.Frame(tab_gen, bg=BG); gf.pack(fill="both", expand=True, padx=20, pady=15)
 
     # Monitor folders
@@ -392,9 +445,36 @@ def _show_settings_window(cfg, cfg_path=None, log=None, version=None):
 
     # Manual organize
     tk.Label(gf, text="\u624b\u52a8\u6574\u7406", font=("Microsoft YaHei UI", 10, "bold"), bg=BG, fg=FG).pack(anchor="w", pady=(0, 6))
-    btn_row = tk.Frame(gf, bg=BG); btn_row.pack(fill="x", pady=(0, 14))
+    organize_row = tk.Frame(gf, bg=BG); organize_row.pack(fill="x", pady=(0, 14))
+    mode_var = tk.StringVar(value="smart")
+    mode_buttons = {}
+
+    mode_group = tk.Frame(organize_row, bg=BORDER)
+    mode_group.pack(side="left")
+
+    def _refresh_mode_buttons():
+        selected = mode_var.get()
+        for mode, btn in mode_buttons.items():
+            if mode == selected:
+                btn.configure(bg=ACCENT, fg="white", activebackground=ACCENT, activeforeground="white")
+            else:
+                btn.configure(bg=BTN_BG, fg=FG, activebackground=TAG_BG, activeforeground=FG)
+
+    def _set_mode(mode):
+        mode_var.set(mode)
+        _refresh_mode_buttons()
+
+    for _mode, _text in [("copy", "\u590d\u5236"), ("move", "\u79fb\u52a8"), ("smart", "\u667a\u80fd")]:
+        btn = tk.Button(mode_group, text=_text, command=lambda m=_mode: _set_mode(m),
+                        bg=BTN_BG, fg=FG, relief="flat",
+                        font=("Microsoft YaHei UI", 9), padx=18, pady=5,
+                        bd=0, highlightthickness=0, cursor="hand2")
+        btn.pack(side="left", padx=(1, 0), pady=1)
+        mode_buttons[_mode] = btn
 
     def _organize(mode):
+        if not _commit_detail():
+            return
         if not wf_list: messagebox.showwarning("\u63d0\u793a", "\u8bf7\u5148\u6dfb\u52a0\u76d1\u63a7\u6587\u4ef6\u5939", parent=root); return
         dst = tf_var.get().strip()
         if not dst: messagebox.showwarning("\u63d0\u793a", "\u8bf7\u5148\u8bbe\u7f6e\u6574\u7406\u76ee\u6807\u76ee\u5f55", parent=root); return
@@ -406,21 +486,16 @@ def _show_settings_window(cfg, cfg_path=None, log=None, version=None):
             clf = Classifier(cat_config)
             total = 0
             for src in wf_list:
-                if os.path.isdir(src): total += clf.organize(src, dst, mode=mode, time_saving=new_cfg.get("time_saving", False), is_manual=True)
+                if os.path.isdir(src): total += clf.organize(src, dst, mode=mode, time_saving=time_var.get(), is_manual=True)
             mc = {"copy": "\u590d\u5236", "move": "\u79fb\u52a8", "smart": "\u667a\u80fd"}.get(mode, mode)
             messagebox.showinfo("\u6574\u7406\u5b8c\u6210", f"\u5df2\u5904\u7406 {total} \u4e2a\u6587\u4ef6 - \u6a21\u5f0f: {mc}", parent=root)
         except Exception as e:
             messagebox.showerror("\u9519\u8bef", f"\u6574\u7406\u5931\u8d25: {e}", parent=root)
 
-    tk.Button(btn_row, text="\u590d\u5236\u5e76\u6574\u7406\u6587\u4ef6", command=lambda: _organize("copy"),
+    _refresh_mode_buttons()
+    tk.Button(organize_row, text="\u5f00\u59cb\u6574\u7406", command=lambda: _organize(mode_var.get()),
               bg=ACCENT, fg="white", relief="flat",
-              font=("Microsoft YaHei UI", 9), padx=12, pady=5, cursor="hand2").pack(side="left", padx=(0, 8))
-    tk.Button(btn_row, text="\u79fb\u52a8\u5e76\u6574\u7406\u6587\u4ef6", command=lambda: _organize("move"),
-              bg=ACCENT, fg="white", relief="flat",
-              font=("Microsoft YaHei UI", 9), padx=12, pady=5, cursor="hand2").pack(side="left", padx=(0, 8))
-    tk.Button(btn_row, text="\u667a\u80fd\u6574\u7406\u76ee\u6807\u6587\u4ef6", command=lambda: _organize("smart"),
-              bg=ACCENT, fg="white", relief="flat",
-              font=("Microsoft YaHei UI", 9), padx=12, pady=5, cursor="hand2").pack(side="left", padx=(0, 8))
+              font=("Microsoft YaHei UI", 9, "bold"), padx=20, pady=5, cursor="hand2").pack(side="left", padx=(10, 0))
 
     tk.Frame(gf, height=1, bg=BORDER).pack(fill="x", pady=(0, 12))
 
@@ -437,43 +512,60 @@ def _show_settings_window(cfg, cfg_path=None, log=None, version=None):
                    highlightthickness=0, relief="flat", cursor="hand2").pack(anchor="w", pady=2)
 
     hard_del_var = tk.BooleanVar(value=new_cfg.get("hard_delete_duplicates", False))
-    tk.Checkbutton(gf, text="彻底删除重复文件（检测到重复时直接删除，不进回收站）", variable=hard_del_var,
-                   font=("Microsoft YaHei UI", 10), bg=BG, fg="#E53935", selectcolor=BG,
-                   activebackground=BG, activeforeground="#E53935",
-                   highlightthickness=0, relief="flat", cursor="hand2").pack(anchor="w", pady=2)
+    warning = tk.Frame(gf, bg=WARNING_BG, highlightbackground=WARNING_BORDER, highlightthickness=1)
+    warning.pack(fill="x", pady=(10, 0))
+    tk.Checkbutton(warning, text="\u5f7b\u5e95\u5220\u9664\u91cd\u590d\u6587\u4ef6", variable=hard_del_var,
+                   font=("Microsoft YaHei UI", 10, "bold"), bg=WARNING_BG, fg="#E53935", selectcolor=WARNING_BG,
+                   activebackground=WARNING_BG, activeforeground="#E53935",
+                   highlightthickness=0, relief="flat", cursor="hand2").pack(anchor="w", padx=10, pady=(8, 0))
+    tk.Label(warning, text="\u68c0\u6d4b\u5230\u91cd\u590d\u65f6\u76f4\u63a5\u5220\u9664\uff0c\u4e0d\u8fdb\u56de\u6536\u7ad9\u3002",
+             font=("Microsoft YaHei UI", 8), bg=WARNING_BG, fg=MUTED).pack(anchor="w", padx=34, pady=(0, 8))
+
+    def _show_tab(tab_name):
+        for child in (tab_cat, tab_gen):
+            child.pack_forget()
+        if tab_name == "categories":
+            tab_cat.pack(fill="both", expand=True)
+        else:
+            tab_gen.pack(fill="both", expand=True)
+        for name, btn in tab_buttons.items():
+            selected = (name == tab_name)
+            btn.configure(bg=CARD_BG if selected else BG,
+                          fg=FG if selected else MUTED,
+                          activebackground=CARD_BG if selected else BTN_BG,
+                          activeforeground=FG)
+
+    tab_buttons["categories"] = tk.Button(nav, text="\u5206\u7c7b\u7ba1\u7406",
+                                          command=lambda: _show_tab("categories"),
+                                          bg=BG, fg=MUTED, relief="flat",
+                                          font=("Microsoft YaHei UI", 9, "bold"),
+                                          padx=18, pady=8, bd=0, highlightthickness=0,
+                                          cursor="hand2")
+    tab_buttons["general"] = tk.Button(nav, text="\u901a\u7528\u8bbe\u7f6e",
+                                       command=lambda: _show_tab("general"),
+                                       bg=BG, fg=MUTED, relief="flat",
+                                       font=("Microsoft YaHei UI", 9, "bold"),
+                                       padx=18, pady=8, bd=0, highlightthickness=0,
+                                       cursor="hand2")
+    tab_buttons["categories"].pack(side="left")
+    tab_buttons["general"].pack(side="left", padx=(4, 0))
+    _show_tab("categories")
 
     # Save/Cancel
     btm = tk.Frame(root, bg=BG); btm.pack(fill="x", padx=20, pady=(8, 14))
 
-    def _apply_detail():
-        """Save current detail panel fields to new_cfg before writing to disk."""
-        entries = []
-        for w in detail_inner.winfo_children():
-            if isinstance(w, tk.Entry):
-                entries.append(w)
-        if len(entries) >= 2:
-            cur_name = entries[0].get().strip()
-            cur_exts_str = entries[1].get().strip()
-            cur_exts = [x.strip().lstrip(".") for x in cur_exts_str.split() if x.strip()]
-            cur_exts = ["." + e if not e.startswith(".") else e for e in cur_exts]
-            if cur_name:
-                sel = cat_listbox.curselection()
-                names = list(new_cfg["categories"].keys())
-                if sel and 0 <= sel[0] < len(names):
-                    old_name = names[sel[0]]
-                    if cur_name != old_name and cur_name not in new_cfg["categories"]:
-                        if old_name in new_cfg["categories"]:
-                            del new_cfg["categories"][old_name]
-                    new_cfg["categories"][cur_name] = cur_exts
-                elif cur_name not in new_cfg["categories"]:
-                    new_cfg["categories"][cur_name] = cur_exts
-
     def _on_save():
         global _settings_win_ref, _tray_open_lock, _tray_lock_holder
-        _apply_detail()
+        if not _commit_detail():
+            return
         new_cfg["watch_folders"] = wf_list
         new_cfg["target_base"] = tf_var.get().strip()
         new_cfg["time_saving"] = time_var.get()
+        if hard_del_var.get() and not cfg.get("hard_delete_duplicates", False):
+            if not messagebox.askyesno("\u786e\u8ba4\u98ce\u9669\u64cd\u4f5c",
+                                       "\u542f\u7528\u540e\uff0c\u91cd\u590d\u6587\u4ef6\u5c06\u76f4\u63a5\u5220\u9664\uff0c\u4e0d\u8fdb\u56de\u6536\u7ad9\u3002\n\n\u786e\u5b9a\u542f\u7528\u5417\uff1f",
+                                       parent=root):
+                return
         new_cfg["hard_delete_duplicates"] = hard_del_var.get()
         if "watch_path" in new_cfg: del new_cfg["watch_path"]
         try:
