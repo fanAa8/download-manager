@@ -56,9 +56,9 @@ except ImportError:
 _IMPORTANT_PYINSTALLER = hasattr(sys, "_MEIPASS")
 if _IMPORTANT_PYINSTALLER:
     _ME = Path(sys._MEIPASS)
-    # Config: look next to the exe first (user-editable), fallback to bundled
+    # Config: always use the editable file next to the exe.
     _EXE_DIR = Path(sys.executable).parent
-    CONFIG_FILE = _EXE_DIR / "config.json" if (_EXE_DIR / "config.json").exists() else _ME / "config.json"
+    CONFIG_FILE = _EXE_DIR / "config.json"
     DB_FILE    = _EXE_DIR / "download_manager.db"
     LOG_FILE    = _EXE_DIR / "download_manager.log"
     BASE_DIR   = _ME
@@ -237,7 +237,7 @@ class Classifier:
             pass
         return self.default_cat
 
-    def organize(self, src: str, dst: str, mode: str = "copy", time_saving: bool = False, is_manual: bool = False) -> int:
+    def organize(self, src: str, dst: str, mode: str = "copy", time_saving: bool = False, is_manual: bool = False, pause_event=None) -> int:
         """Scan src folder recursively, classify files, copy/move to dst/{category}/.
 
         Smart mode logic:
@@ -386,6 +386,8 @@ class Classifier:
                         pass
 
         for item in src_path.iterdir():
+            if pause_event:
+                pause_event.wait()
             if item.is_file():
                 cat = self.classify(item.name)
                 if _should_skip(cat):

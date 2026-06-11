@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """System tray icon + Settings UI for Download Manager."""
 
@@ -6,6 +6,7 @@ import os, sys, json, threading, time, shutil, subprocess, copy
 from pathlib import Path
 from tkinter import ttk, messagebox, filedialog
 import tkinter as tk
+import winreg
 
 try:
     import pystray
@@ -52,10 +53,39 @@ def _set_dark_titlebar(root):
 
 
 def _is_autostart():
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run") as k:
+            winreg.QueryValueEx(k, "DownloadClassifierManager")
+        return True
+    except FileNotFoundError:
+        pass
+    except Exception:
+        pass
     return _STARTUP_PATH.exists()
 
 
 def _set_autostart(enable):
+    run_key = r"Software\Microsoft\Windows\CurrentVersion\Run"
+    app_name = "DownloadClassifierManager"
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, run_key, 0, winreg.KEY_SET_VALUE) as k:
+            if enable:
+                exe = str(Path(sys.executable).resolve())
+                winreg.SetValueEx(k, app_name, 0, winreg.REG_SZ, f'"{exe}"')
+            else:
+                try:
+                    winreg.DeleteValue(k, app_name)
+                except FileNotFoundError:
+                    pass
+        if not enable:
+            try:
+                _STARTUP_PATH.unlink(missing_ok=True)
+            except Exception:
+                pass
+        return True
+    except Exception:
+        pass
+
     if enable:
         try:
             exe = sys.executable
@@ -67,15 +97,17 @@ def _set_autostart(enable):
                 f2.write(f"$sc.TargetPath = '{exe}'\n")
                 f2.write(f"$sc.WorkingDirectory = '{str(Path(exe).parent)}'\n")
                 f2.write("$sc.Save()\n")
-            subprocess.run(["powershell", "-ExecutionPolicy", "Bypass", "-File", tmp], capture_output=True, timeout=10)
+            proc = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", tmp], capture_output=True, timeout=10)
             os.unlink(tmp)
+            return proc.returncode == 0 and _STARTUP_PATH.exists()
         except Exception:
-            pass
+            return False
     else:
         try:
             _STARTUP_PATH.unlink(missing_ok=True)
+            return True
         except Exception:
-            pass
+            return False
 
 
 def smart_move(src, dst):
@@ -137,6 +169,15 @@ def _show_settings_window(cfg, cfg_path=None, log=None, version=None):
     root.title("\u4e0b\u8f7d\u5206\u7c7b\u7ba1\u5bb6 - \u8bbe\u7f6e")
     root.configure(bg=BG); root.resizable(True, True); root.overrideredirect(False)
     _set_dark_titlebar(root)
+    try:
+        import ctypes
+        hwnd = root.winfo_id()
+        GWL_STYLE = -16
+        WS_MAXIMIZEBOX = 0x00010000
+        style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_STYLE)
+        ctypes.windll.user32.SetWindowLongW(hwnd, GWL_STYLE, style & ~WS_MAXIMIZEBOX)
+    except Exception:
+        pass
     root.update_idletasks()
     sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
     w, h = 700, 580
@@ -159,6 +200,7 @@ def _show_settings_window(cfg, cfg_path=None, log=None, version=None):
     body = tk.Frame(main, bg=BG, highlightbackground=BORDER, highlightthickness=1)
     body.pack(fill="both", expand=True, padx=0, pady=(0, 0))
     tab_buttons = {}
+    suppress_list_event = {"value": False}
 
     # ================================================================
     # Tab 1: Categories - left list + right detail
@@ -235,16 +277,20 @@ def _show_settings_window(cfg, cfg_path=None, log=None, version=None):
                 names = list(new_cfg["categories"].keys())
                 if 0 <= idx < len(names):
                     selected_name = names[idx]
-        cat_listbox.delete(0, tk.END)
-        for name in new_cfg["categories"]:
-            cat_listbox.insert(tk.END, name)
-        cat_listbox.selection_clear(0, tk.END)
-        if selected_name:
-            names = list(new_cfg["categories"].keys())
-            if selected_name in names:
-                idx = names.index(selected_name)
-                cat_listbox.selection_set(idx)
-                cat_listbox.see(idx)
+        suppress_list_event["value"] = True
+        try:
+            cat_listbox.delete(0, tk.END)
+            for name in new_cfg["categories"]:
+                cat_listbox.insert(tk.END, name)
+            cat_listbox.selection_clear(0, tk.END)
+            if selected_name:
+                names = list(new_cfg["categories"].keys())
+                if selected_name in names:
+                    idx = names.index(selected_name)
+                    cat_listbox.selection_set(idx)
+                    cat_listbox.see(idx)
+        finally:
+            suppress_list_event["value"] = False
 
     def _replace_category(old_name, new_name, exts):
         rebuilt = {}
@@ -269,7 +315,10 @@ def _show_settings_window(cfg, cfg_path=None, log=None, version=None):
         if new_name != old_name and new_name in new_cfg["categories"]:
             messagebox.showwarning("\u91cd\u590d", f"\u300c{new_name}\u300d\u5df2\u5b58\u5728", parent=root)
             return False
-        new_exts = _parse_exts(ext_text.get("1.0", "end"))
+        try:
+            new_exts = _parse_exts(ext_text.get("1.0", "end"))
+        except tk.TclError:
+            return True
         if new_name != old_name:
             _replace_category(old_name, new_name, new_exts)
             detail_state["cname"] = new_name
@@ -329,6 +378,8 @@ def _show_settings_window(cfg, cfg_path=None, log=None, version=None):
         _update_ext_meta()
 
     def _on_list_select(event=None):
+        if suppress_list_event["value"]:
+            return
         sel = cat_listbox.curselection()
         if sel:
             names = list(new_cfg["categories"].keys())
@@ -472,9 +523,18 @@ def _show_settings_window(cfg, cfg_path=None, log=None, version=None):
         btn.pack(side="left", padx=(1, 0), pady=1)
         mode_buttons[_mode] = btn
 
+    pause_event = threading.Event()
+    pause_event.set()
+    organize_state = {"running": False}
+
     def _organize(mode):
-        if not _commit_detail():
+        if organize_state["running"]:
+            pause_event.clear()
+            organize_btn.configure(text="\u5f00\u59cb\u667a\u80fd\u6574\u7406")
+            organize_state["running"] = False
             return
+
+        if not _commit_detail(): return
         if not wf_list: messagebox.showwarning("\u63d0\u793a", "\u8bf7\u5148\u6dfb\u52a0\u76d1\u63a7\u6587\u4ef6\u5939", parent=root); return
         dst = tf_var.get().strip()
         if not dst: messagebox.showwarning("\u63d0\u793a", "\u8bf7\u5148\u8bbe\u7f6e\u6574\u7406\u76ee\u6807\u76ee\u5f55", parent=root); return
@@ -484,18 +544,33 @@ def _show_settings_window(cfg, cfg_path=None, log=None, version=None):
         try:
             from download_manager import Classifier
             clf = Classifier(cat_config)
+
+            organize_state["running"] = True
+            pause_event.set()
+            organize_btn.configure(text="\u6682\u505c\u667a\u80fd\u6574\u7406")
+
             total = 0
             for src in wf_list:
-                if os.path.isdir(src): total += clf.organize(src, dst, mode=mode, time_saving=time_var.get(), is_manual=True)
+                if not pause_event.is_set():
+                    break
+                if os.path.isdir(src):
+                    total += clf.organize(src, dst, mode=mode, time_saving=time_var.get(), is_manual=True, pause_event=pause_event)
             mc = {"copy": "\u590d\u5236", "move": "\u79fb\u52a8", "smart": "\u667a\u80fd"}.get(mode, mode)
-            messagebox.showinfo("\u6574\u7406\u5b8c\u6210", f"\u5df2\u5904\u7406 {total} \u4e2a\u6587\u4ef6 - \u6a21\u5f0f: {mc}", parent=root)
+            if not pause_event.is_set():
+                messagebox.showinfo("\u6574\u7406\u5df2\u505c\u6b62", f"\u5df2\u5904\u7406 {total} \u4e2a\u6587\u4ef6 - \u6a21\u5f0f: {mc}", parent=root)
+            else:
+                messagebox.showinfo("\u6574\u7406\u5b8c\u6210", f"\u5df2\u5904\u7406 {total} \u4e2a\u6587\u4ef6 - \u6a21\u5f0f: {mc}", parent=root)
         except Exception as e:
             messagebox.showerror("\u9519\u8bef", f"\u6574\u7406\u5931\u8d25: {e}", parent=root)
+        finally:
+            organize_state["running"] = False
+            organize_btn.configure(text="\u5f00\u59cb\u667a\u80fd\u6574\u7406")
 
     _refresh_mode_buttons()
-    tk.Button(organize_row, text="\u5f00\u59cb\u6574\u7406", command=lambda: _organize(mode_var.get()),
+    organize_btn = tk.Button(organize_row, text="\u5f00\u59cb\u667a\u80fd\u6574\u7406", command=lambda: _organize(mode_var.get()),
               bg=ACCENT, fg="white", relief="flat",
-              font=("Microsoft YaHei UI", 9, "bold"), padx=20, pady=5, cursor="hand2").pack(side="left", padx=(10, 0))
+              font=("Microsoft YaHei UI", 9, "bold"), padx=20, pady=5, cursor="hand2")
+    organize_btn.pack(side="left", padx=(10, 0))
 
     tk.Frame(gf, height=1, bg=BORDER).pack(fill="x", pady=(0, 12))
 
@@ -554,6 +629,8 @@ def _show_settings_window(cfg, cfg_path=None, log=None, version=None):
     # Save/Cancel
     btm = tk.Frame(root, bg=BG); btm.pack(fill="x", padx=20, pady=(8, 14))
 
+    original_autostart = _is_autostart()
+
     def _on_save():
         global _settings_win_ref, _tray_open_lock, _tray_lock_holder
         if not _commit_detail():
@@ -571,8 +648,12 @@ def _show_settings_window(cfg, cfg_path=None, log=None, version=None):
         try:
             with open(cfg_path, "w", encoding="utf-8") as cf:
                 json.dump(new_cfg, cf, ensure_ascii=False, indent=2)
-        except Exception: pass
-        _set_autostart(auto_var.get())
+        except Exception as e:
+            messagebox.showerror("\u4fdd\u5b58\u5931\u8d25", f"\u914d\u7f6e\u5199\u5165\u5931\u8d25\uff1a{e}", parent=root)
+            return
+        if auto_var.get() != original_autostart and not _set_autostart(auto_var.get()):
+            messagebox.showerror("\u4fdd\u5b58\u5931\u8d25", "\u5f00\u673a\u81ea\u542f\u8bbe\u7f6e\u5931\u8d25\uff0c\u8bf7\u68c0\u67e5\u7cfb\u7edf\u6743\u9650\u6216\u5b89\u5168\u8f6f\u4ef6\u62e6\u622a\u3002", parent=root)
+            return
         result["applied"] = True; result["config"] = new_cfg
         _on_close()
 
@@ -600,6 +681,51 @@ def setup_tray(db, classifier, cfg, observer, log, version=None, cfg_path=None):
     global _tray_open_lock, _tray_lock_holder
     if not HAS_TRAY: print("[DM] pystray not installed, tray disabled"); return
 
+    def _apply_runtime_config(updated_cfg):
+        if not updated_cfg:
+            return
+        try:
+            from download_manager import Classifier
+            classifier.__dict__.update(
+                Classifier(updated_cfg.get("categories", {}),
+                           updated_cfg.get("default_category", "\u5176\u4ed6")).__dict__
+            )
+        except Exception as e:
+            try: log.warning(f"Reload classifier failed: {e}")
+            except Exception: pass
+
+        cfg.clear()
+        cfg.update(updated_cfg)
+
+        try:
+            new_target = Path(updated_cfg.get("target_base", ""))
+            existing_handlers = []
+            for handlers in list(getattr(observer, "_handlers", {}).values()):
+                existing_handlers.extend(list(handlers))
+            handler_cls = existing_handlers[0].__class__ if existing_handlers else None
+            for handler in existing_handlers:
+                try:
+                    handler.config = cfg
+                    handler.target = new_target
+                    handler.classifier = classifier
+                except Exception:
+                    pass
+            for watch in list(getattr(observer, "_watches", [])):
+                try:
+                    observer.unschedule(watch)
+                except Exception:
+                    pass
+            for wf in updated_cfg.get("watch_folders", []):
+                if os.path.exists(wf):
+                    if handler_cls is None:
+                        continue
+                    observer.schedule(handler_cls(db, classifier, cfg), wf, recursive=True)
+                    try: log.info(f"Reload watch folder: {wf}")
+                    except Exception: pass
+        except Exception as e:
+            try: log.warning(f"Reload watch folders failed: {e}")
+            except Exception: pass
+
     def _open_settings():
         def _run():
             global _tray_open_lock, _tray_lock_holder
@@ -614,15 +740,20 @@ def setup_tray(db, classifier, cfg, observer, log, version=None, cfg_path=None):
                     fresh_cfg = cfg
             except Exception:
                 fresh_cfg = cfg
-            try: _show_settings_window(fresh_cfg, cfg_path, log, version)
-            except Exception: pass
+            try:
+                result = _show_settings_window(fresh_cfg, cfg_path, log, version)
+                if result and result.get("applied"):
+                    _apply_runtime_config(result.get("config"))
+            except Exception as e:
+                try: log.error(f"Settings window error: {e}")
+                except Exception: pass
             finally:
                 try: _tray_open_lock.release(); _tray_lock_holder = False
                 except Exception: pass
         threading.Thread(target=_run, daemon=True).start()
 
     def _about(icon):
-        threading.Thread(target=lambda: messagebox.showinfo("\u5173\u4e8e", "\u4e0b\u8f7d\u5206\u7c7b\u7ba1\u5bb6\n\u81ea\u52a8\u6574\u7406\u4e0b\u8f7d\u6587\u4ef6\u5939\n\nPowered by OpenClaw"), daemon=True).start()
+        threading.Thread(target=lambda: messagebox.showinfo("\u5173\u4e8e", "\u4e0b\u8f7d\u5206\u7c7b\u7ba1\u5bb6\n\u81ea\u52a8\u6574\u7406\u4e0b\u8f7d\u6587\u4ef6\u5939\n\nPowered by MiMoCode\nhttps://github.com/fanAa8/download-manager"), daemon=True).start()
 
     def _do_exit(icon):
         try: icon.stop()

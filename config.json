@@ -51,7 +51,6 @@
       ".txz",
       ".iso",
       ".img",
-      ".dmg",
       ".vhd",
       ".vhdx",
       ".wim",
@@ -102,7 +101,6 @@
       ".htm",
       ".css",
       ".js",
-      ".ts",
       ".jsx",
       ".tsx",
       ".vue",
@@ -215,7 +213,9 @@
       ".dff",
       ".dsf"
     ],
-    "其他": []
+    "其他": [],
+    "新建分类": [],
+    "新建分类2": []
   },
   "time_saving": true,
   "settle_window": 3,
