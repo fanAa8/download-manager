@@ -14,12 +14,16 @@
 
 ```bash
 # Python 3.11+
-pip install pyinstaller watchdog pystray pillow
+pip install -r requirements.txt
 
 # 运行
 python download_manager.py
 
-# 打包
+# 规则测试（不打开窗口）
+python -m unittest discover -s tests -v
+
+# 在 Windows 上打包；其他系统可先检查参数
+python build.py --dry-run
 python build.py
 ```
 
@@ -27,12 +31,16 @@ python build.py
 
 ```
 download-manager/
-├── download_manager.py   # 核心逻辑：监控、分类、移动
-├── settings_ui.py        # 托盘 + 设置界面
-├── build.py              # PyInstaller 打包脚本
-├── config.json           # 配置文件（运行时生成）
+├── download_manager.py    # 启动入口
+├── settings_ui.py         # 兼容旧的导入路径
+├── dlm/                   # 监控、分类、整理、配置、托盘、设置
+├── config.default.json    # 提交进仓库的默认分类
+├── build.py               # PyInstaller 打包
+├── tests/                 # 单元测试
 └── README.md
 ```
+
+`config.json`、数据库、日志和 `release/` 里的 zip 都不要提交。发布包上传到 GitHub Releases。
 
 ## Bug 报告
 

@@ -1,59 +1,58 @@
 @echo off
-REM ============================================================
-REM  下载分类管家 — 安装脚本
-REM  双击运行即可，无需 Python 环境
-REM ============================================================
+chcp 65001 >nul
+setlocal
+cd /d "%~dp0"
 
 echo.
 echo ============================================================
-echo   下载分类管家 v1.1  —  安装脚本
+echo   下载分类管家  安装
 echo ============================================================
 echo.
 
-REM --- 1. 检查是否已存在 exe ---
-set EXE=下载分类管家.exe
-if not exist "%~dp0%EXE%" (
-    echo [ERROR] %EXE% 未找到！
-    echo         请确保此 bat 与 exe 在同一文件夹内。
-    pause & exit /b 1
+if not exist "%~dp0下载分类管家.exe" (
+    echo [错误] 没有找到 下载分类管家.exe
+    echo        请把本脚本和 exe 放在同一个文件夹。
+    pause
+    exit /b 1
 )
 
-REM --- 2. 写入注册表，实现"右键 → 发送到 → 下载分类管家" ---
-set KEY=HKCU\Software\Classes\Applications\%EXE%\shell\open\command
-reg add "%KEY%" /ve /d "\"%~dp0%EXE%\" \"%%1\"" /f >nul 2>&1
-
-echo [OK] 右键菜单关联完成
-
-REM --- 3. 询问是否开机自启 ---
-echo.
-set /p AUTO=是否添加到开机自启动？(Y/N，默认Y):
-if "%AUTO%"=="" set AUTO=Y
-if /i "%AUTO%"=="Y" (
-    set SCF=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\下载分类管家.lnk
-    powershell -Command "$s=(New-Object -COM WScript.Shell).CreateShortcut('%SCF%');$s.TargetPath='%~dp0%EXE%';$s.WorkingDirectory='%~dp0';$s.Save()"
-    echo [OK] 已添加到开机自启动
-) else (
-    echo [跳过] 未添加自启动
-)
-
-REM --- 4. 首次运行：生成 config.json（如果不存在）---
 if not exist "%~dp0config.json" (
-    echo [INFO] 首次运行，正在生成默认配置...
-    "%~dp0%EXE%" --init >nul 2>&1
-    echo [OK] 配置已生成：%~dp0config.json
-    echo       可编辑 config.json 自定义分类规则
+    if exist "%~dp0config.default.json" (
+        copy /Y "%~dp0config.default.json" "%~dp0config.json" >nul
+        echo [完成] 已根据默认模板生成 config.json
+    )
 )
 
 echo.
-echo ============================================================
-echo   安装完成！
+set /p AUTO=是否开机自动启动？^(Y/N，默认 N^): 
+if /I "%AUTO%"=="Y" (
+    reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v DownloadClassifierManager /t REG_SZ /d "\"%~dp0下载分类管家.exe\"" /f >nul
+    if errorlevel 1 (
+        echo [失败] 没能写入启动项，可以稍后在设置里再打开。
+    ) else (
+        echo [完成] 已写入当前用户的启动项。
+    )
+) else (
+    echo [跳过] 开机启动
+)
+
 echo.
-echo   使用方法：
-echo     1. 双击「%EXE%」启动监控
-echo     2. 编辑 config.json 修改监控目录 / 分类规则
-echo     3. 查看 download_manager.log 查看运行日志
+set /p SEND=是否加入“发送到”菜单？^(Y/N，默认 N^): 
+if /I "%SEND%"=="Y" (
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "$s=(New-Object -COM WScript.Shell).CreateShortcut([Environment]::GetFolderPath('SendTo') + '\下载分类管家.lnk'); $s.TargetPath='%~dp0下载分类管家.exe'; $s.WorkingDirectory='%~dp0'; $s.Save()"
+    echo [完成] 右键文件后可以“发送到 - 下载分类管家”。
+) else (
+    echo [跳过] 发送到
+)
+
 echo.
-echo   卸载：删除本文件夹即可（绿色软件，无残留）
-echo ============================================================
+echo 接下来：
+echo   1. 双击 下载分类管家.exe
+echo   2. 左键托盘图标，或右键菜单里的“打开设置”
+echo   3. 选择监控目录和整理目标
+echo.
+echo 卸载：先在设置里关闭开机启动，再删除“发送到”快捷方式和本文件夹。
+echo 日志在同目录的 download_manager.log
 echo.
 pause
+endlocal
