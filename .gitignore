@@ -16,6 +16,13 @@ download_manager.db-shm
 download_manager.db-wal
 download_manager.log
 config.json
+config.json.tmp
+config.json.bad
+config.json.*.bad
+
+# Release bundles belong on GitHub Releases, not in git
+release/
+*.zip
 
 # Backup directories
 backup_*/
